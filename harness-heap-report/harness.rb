@@ -11,10 +11,27 @@ module HeapHarness
     "#{(bytes / 1024.0 / 1024).round(1)}MiB"
   end
 
+  def to_kib(bytes)
+    "#{(bytes / 1024.0).round(1)}kiB"
+  end
+
+  def source(obj)
+    "#{obj["file"]}:#{obj["line"]} (#{obj["method"]}) "
+  end
+
   def heap_report(file)
     require "json"
 
     early_evictions = Hash.new(0)
+    early_evictions_mem = Hash.new(0)
+
+    over_size = Hash.new(0)
+    over_size_mem = Hash.new(0)
+
+    ideal_sizes = 9.times.to_h do |size|
+      [size, ObjectSpace.memsize_of(size.times.to_h { |i| [i, i]}.dup)]
+    end
+    p ideal_sizes
 
     count = 0
     heap_memory = 0
@@ -42,8 +59,14 @@ module HeapHarness
         hash_heap_memory += slot_size
         hash_malloc_memory += malloc_size
 
-        if malloc_size > 0 && obj["size"] <= 8
-          early_evictions["#{obj["file"]}:#{obj["line"]}"] += 1
+        if obj["size"] <= 8
+          if malloc_size > 0
+            early_evictions[source(obj)] += 1
+            early_evictions_mem[source(obj)] += (obj["memsize"] - ideal_sizes[obj["size"]])
+          elsif obj["memsize"] > ideal_sizes[obj["size"]]
+            over_size[source(obj)] += 1
+            over_size_mem[source(obj)] += (obj["memsize"] - ideal_sizes[obj["size"]])
+          end
         end
       end
     end
@@ -57,12 +80,20 @@ module HeapHarness
     puts "  (malloc: #{to_mib(hash_malloc_memory)}, heap: #{to_mib(hash_heap_memory)})"
     puts
     puts "top early evictions sources"
-    puts(early_evictions.sort_by { |(k, v)| - v}.first(20).map { |k, v| "#{k}: #{v}" })
+    puts(early_evictions_mem.sort_by { |(k, v)| - v}.first(20).map { |k, v| "#{k}: #{to_kib(v)} (#{early_evictions[k]})" })
+    puts
+    puts "over size"
+    puts(over_size_mem.sort_by { |(k, v)| - v}.first(20).map { |k, v| "#{k}: #{to_kib(v)} (#{over_size[k]})" })
+    puts
+    # puts "top 0 size st_table sources ()"
+    # puts(zero_sized.sort_by { |(k, v)| - v}.first(20).map { |k, v| "#{k}: #{v}" })
+    # puts
     puts "=" * 40
   end
 end
 
 def run_benchmark(_num)
+  Process.warmup
   yield # prewarm
   GC.start
   GC.disable
